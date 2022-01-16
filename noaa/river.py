@@ -6,9 +6,9 @@ __copyright__ = 'Copyright (c) 2013'
 __license__   = 'Apache License, Version 2.0'
 
 import logging
-import urllib2, re
 import json
 import math
+import requests
 
 
 def get_bounding_box(latitude_in_degrees, longitude_in_degrees, half_side, kilometers=False):
@@ -93,10 +93,9 @@ class Rivergauge:
 		Takes the NWIS URL.
 		"""	
 		self.log.info("URL is %s", nwis_url)
-		handler  = urllib2.urlopen(nwis_url, timeout=90)
-		json_str = handler.read()
-		db       = json.loads(json_str)
-		handler.close()
+		r  = requests.get(nwis_url, timeout=90)
+		db = json.loads(r.text)
+		r.close()
 
 		ts    = db[u'value'][u'timeSeries']
 		self.gauges = {}
@@ -113,21 +112,21 @@ class Rivergauge:
 					lat = float(gl[u'latitude'])
 					lon = float(gl[u'longitude'])
 
-					self.log.debug("Site %s Name  %s Latitude %f Longititde %f.", siteCode,  site_name, lat, lon) 
+					self.log.debug("Site %s Name  %s Latitude %f Longititde %f." % (siteCode,  site_name, lat, lon)) 
 					self.gauges[siteCode] = {'siteCode':siteCode, 'lat':lat,'lon':lon,'site_name':site_name,'reading':{}}
 
 
 				type_num = item[u'variable'][u'variableCode'][0][u'value']
 				desc     = item[u'variable'][u'variableDescription'].encode('latin-1')
-				name     = item[u'variable'][u'unit'][u'unitAbbreviation'].encode('latin-1')
-				valList  = item[u'values'][0][u'value']
-				value    = valList[len(valList) -1][u'value']
-				time     = valList[len(valList) -1][u'dateTime'].encode('latin-1')
-				prevVal  = valList[len(valList) -2][u'value']
+				name     = item[u'variable'][u'unit'][u'unitCode'].encode('latin-1')
+				val_list = item[u'values'][0][u'value']
+				value    = val_list[len(val_list) -1][u'value']
+				time     = val_list[len(val_list) -1][u'dateTime'].encode('latin-1')
+				prev_val = val_list[len(val_list) -2][u'value']
 
-				self.log.debug('type:%s  Name:%s  Value:%s  Prev:%s at %s', type_num, name,  value, prevVal, time)
+				self.log.debug('type:%s  Name:%s  Value:%s  Prev:%s at %s' % (type_num, name,  value, prev_val, time))
 
-				self.gauges[siteCode]['reading'][name] = {'type':type_num, 'description':desc, 'time':time, 'value':value, 'prevVal':prevVal}
+				self.gauges[siteCode]['reading'][type_num] = {'name':name, 'description':desc, 'time':time, 'value':value, 'prevVal':prev_val}
 			except:
 				self.log.debug('Exception processing %s', str(item))
 
@@ -176,21 +175,22 @@ class Rivergauge:
 		""" print the USGS Site Data"""
 		out = ''
 		keys = site['reading'].keys()
-		if 'ft' in keys:
+
+		if '00065' in keys:
 			out +=  '%s : %s located at latitude %f longitude %f\n' % (site['siteCode'], site['site_name'], site['lat'], site['lon'])
-			ft      = float(site['reading']['ft']['value'])
-			ft_prev = float(site['reading']['ft']['prevVal'])
-			out += 'Currently at %s feet ' % site['reading']['ft']['value']
-			if 'cfs' in keys:
-				out += '(%s CFS) ' % site['reading']['cfs']['value']
+			ft      = float(site['reading']['00065']['value'])
+			ft_prev = float(site['reading']['00065']['prevVal'])
+			out += 'Currently at %s feet ' % site['reading']['00065']['value']
 			if ft > ft_prev:
 				out += 'Rising   '
 			elif ft < ft_prev:
 				out += 'Failling '
 			else:
 				out += 'Holding  '
-			if 'deg C' in keys:
-				out += 'Temp (centegrade) %f ' % float(site['reading']['deg C']['value'])
+		if '00010' in keys:
+			out += 'Temp (centegrade) %f ' % float(site['reading']['00010']['value'])
+		if '00060' in keys:
+			out += '(%s CFS) ' % site['reading']['00060']['value']
 		return out
 
 
@@ -198,32 +198,31 @@ class Rivergauge:
 
 if __name__ == '__main__':
 	log = logging.logger = logging.getLogger('Rivergauge')
-	#formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 	logging.basicConfig(format='%(asctime)s - %(name)s - %(funcName)s - %(message)s', level=logging.INFO)
 	log.debug('About to instantiate Rivergauge')
 
 	rg  = Rivergauge()
 
-	print '\n\n============================================='
-	print '              Gauges within 30 Miles'
+	print('\n\n=============================================\n')
+	print('              Gauges within 30 Miles')
 	gauges = rg.query_by_radius(38.96, -77.45, 15)
 	for site in gauges.keys():
 		print(rg.site_data_str(gauges[site]) + '\n')
 
-	print '\n\n============================================='
-	print '              Gauges in Bounded Box'
+	print('\n\n=============================================\n')
+	print('              Gauges in Bounded Box')
 	gauges = rg.query_by_bbox(-78.0,38.0,-77.5,39.3)
 	for site in gauges.keys():
 		print(rg.site_data_str(gauges[site]) + '\n')
 
-	print '\n\n============================================='
-	print '              Multiple Gauges'
+	print('\n\n=============================================\n')
+	print('              Multiple Gauges')
 	gauges = rg.query_by_gauges(['01646500','01643700'])
 	for site in gauges.keys():
 		print(rg.site_data_str(gauges[site]) + '\n')
 
-	print '\n\n============================================='
-	print '              Single Gauge'
+	print('\n\n=============================================\n')
+	print('              Single Gauge')
 	gauges = rg.query_by_gauge('01646500')
 	for site in gauges.keys():
 		print(rg.site_data_str(gauges[site]) + '\n')

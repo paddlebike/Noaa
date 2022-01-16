@@ -6,9 +6,8 @@ __copyright__ = 'Copyright (c) 2013'
 __license__   = 'Apache License, Version 2.0'
 
 import logging
-import urllib2, re
+import requests
 from xml.dom import minidom
-from urllib import quote
 
 class NoaaClass:
 	"""A class for SOAP interfacing with NOAA weather reports"""
@@ -27,9 +26,10 @@ class NoaaClass:
 		self.log.info("called with lat %f, lon %f.", lat, lon)
 		NOAA_WEATHER_URL = 'http://forecast.weather.gov/MapClick.php?lat={0}&lon=-{1}&unit=0&lg=english&FcstType=dwml'.format(lat, lon)
 		self.log.debug("URL is %s", NOAA_WEATHER_URL)
-		handler = urllib2.urlopen(NOAA_WEATHER_URL)
-		dom     = minidom.parse(handler)
-		handler.close()
+		r = requests.get(NOAA_WEATHER_URL)
+
+		dom     = minidom.parseString(r.text)
+		r.close()
 
 		weather_data    = dom.getElementsByTagName('data')
 		forecast_params = None
@@ -133,24 +133,24 @@ class NoaaClass:
 
 if __name__ == '__main__':
 	log = logging.logger = logging.getLogger('noaa_main')
-	#formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
 	logging.basicConfig(format='%(asctime)s - %(name)s - %(funcName)s - %(message)s', level=logging.DEBUG)
 	log.debug('About to instantiate NoaaClass')
 
 	noaa = NoaaClass()
 	try:
 		noaa.query_by_lat_lon(38.95,77.343)
-	except:
-		print 'Unable to get the weather from NOAA.  Make sure you have the right lat.long'
+	except Exception as e:
+		print('Unable to get the weather from NOAA.  Make sure you have the right lat.long\n%s\n' % e)
 		exit()
 	
-	print '---------------------------------------------------------------------'
-	print "Currently {0} temperature {1} degrees dew point {2}".format(noaa.summary, noaa.temp, noaa.dewpoint)
-	print '---------------------------------------------------------------------\n'
+	print('---------------------------------------------------------------------')
+	print("Currently {0} temperature {1} degrees dew point {2}".format(noaa.summary, noaa.temp, noaa.dewpoint))
+	print('---------------------------------------------------------------------\n')
 
 	log.debug('About to get_forecast')
 	for fc in noaa.forecast:
-		print "{0}\n{1}\n".format(fc['period-name'], fc['text'])
+		print("{0}\n{1}\n".format(fc['period-name'], fc['text']))
 
-	print '---------------------------------------------------------------------\n'
+	print('---------------------------------------------------------------------\n')
 
