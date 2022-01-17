@@ -1,4 +1,3 @@
-#! /usr/bin/python
 """Retrieve the river conditions for the requested gauge."""
 
 __author__    = 'Ken Andrews <paddlebike@google.com>'
@@ -13,7 +12,7 @@ import requests
 
 def get_bounding_box(latitude_in_degrees, longitude_in_degrees, half_side, kilometers=False):
 	"""
-	Calcalates a bounding box based ona location, distance and kilometers/miles
+	Calculates a bounding box based ona location, distance and kilometers/miles
 	Returns a bounding box made up of the tuples (west, south, east, north)
 	"""
 	assert half_side > 0
@@ -77,14 +76,94 @@ def distance_on_unit_sphere(lat1, long1, lat2, long2, kilometers=False):
 		return arc * 6373
 	return arc * 3960
 
-class Rivergauge:
+class NWIS_Gauge_Reading:
+	"""Container for stream gauge reading"""
+
+	def __init__(self, value):
+		self.value = value
+
+class NWIS_Gauge:
+	"""A container for stream gauge data"""
+
+	def __init__(self, timeseries):
+		try:
+			self.code     = timeseries[u'variable'][u'variableCode'][0][u'value']
+			self.desc     = timeseries[u'variable'][u'variableDescription']
+			self.name     = timeseries[u'variable'][u'unit'][u'unitCode']
+			self.val_list = timeseries[u'values'][0][u'value']
+		except Exception as e:
+				print('Exception %s processing Site %s', e, self.code)
+
+
+	def __str__(self):
+		out = '%s %-8s %-40s' % (self.code, self.name, self.desc)
+		vl = len(self.val_list)
+		
+		if vl > 0:
+			out += ' at %s %s' % (self.last_time, self.last)
+		if vl > 1:
+			out += ' prev %s' % (self.prev)
+		
+		return out
+
+
+	@property
+	def last(self):
+		return self.val_list[len(self.val_list) -1][u'value']
+
+
+	@property
+	def prev(self):
+		return self.val_list[len(self.val_list) -2][u'value']
+
+
+	@property
+	def last_time(self):
+		return self.val_list[len(self.val_list) -1][u'dateTime']
+			
+
+
+class NWIS_Site:
+	"""A container for stream site data"""
+	def __init__(self, timeseries):
+		self.gauges = {}
+		self.siteCode = ''
+		try:
+			self.siteCode = timeseries[u'sourceInfo'][u'siteCode'][0][u'value']
+			self.site_name = timeseries[u'sourceInfo'][u'siteName']
+			
+			self.gl = timeseries[u'sourceInfo'][u'geoLocation'][u'geogLocation']
+			self.lat = float(self.gl[u'latitude'])
+			self.lon = float(self.gl[u'longitude'])
+
+		except Exception as e:
+			print('Exception %s processing Site %s', e, self.siteCode)
+
+
+	def __str__(self):
+		out = "Site %s Name  %s Latitude %f Longititde %f.\n" % (self.siteCode,  self.site_name, self.lat, self.lon)
+		out += 'Gauges:\n'
+		for id in self.gauges.keys():
+			out += '%s\n' % (self.gauges[id])
+		return out
+
+	def add_gauge(self, gauge):
+		self.gauges[gauge.code] = gauge
+
+	def gauge_strings(self):
+		gauges = 'Gauges:'
+		for id in self.gauges.keys():
+			gauge = self.gauges[id]
+			gauges += '\n%s' % (gauge)
+
+
+class NWIS:
 	"""A class for SOAP interfacing with USGS site"""
 
 	def __init__(self):
 		"""Contstructor for Rivergauge."""
 		self.log = logging.getLogger('Rivergauge')
 		self.log.debug("called.")
-		self.gauges = {}
 
 
 	def query_nwis(self, nwis_url):
@@ -98,102 +177,60 @@ class Rivergauge:
 		r.close()
 
 		ts    = db[u'value'][u'timeSeries']
-		self.gauges = {}
+		sites = {}
 
 		for item in ts:
 			try:
-				new_gauge  = {}
-				# Get some basic data about the gauge.
-				siteCode = item[u'sourceInfo'][u'siteCode'][0][u'value'].encode('latin-1')
-				if not siteCode in self.gauges.keys():
-					site_name = item[u'sourceInfo'][u'siteName'].encode('latin-1')
-					
-					gl = item[u'sourceInfo'][u'geoLocation'][u'geogLocation']
-					lat = float(gl[u'latitude'])
-					lon = float(gl[u'longitude'])
-
-					self.log.debug("Site %s Name  %s Latitude %f Longititde %f." % (siteCode,  site_name, lat, lon)) 
-					self.gauges[siteCode] = {'siteCode':siteCode, 'lat':lat,'lon':lon,'site_name':site_name,'reading':{}}
+				site = NWIS_Site(item)
+				if not site.siteCode in sites.keys():
+					sites[site.siteCode] = site
+				gauge = NWIS_Gauge(item)
+				sites[site.siteCode].add_gauge(gauge)
+				
+			except Exception as e:
+				print('Exception %s processing' % (e))
+		return sites
 
 
-				type_num = item[u'variable'][u'variableCode'][0][u'value']
-				desc     = item[u'variable'][u'variableDescription'].encode('latin-1')
-				name     = item[u'variable'][u'unit'][u'unitCode'].encode('latin-1')
-				val_list = item[u'values'][0][u'value']
-				value    = val_list[len(val_list) -1][u'value']
-				time     = val_list[len(val_list) -1][u'dateTime'].encode('latin-1')
-				prev_val = val_list[len(val_list) -2][u'value']
+	def query_by_site_id(self, site_id):
+		"""
+		Fetches the json site and parses part of it.
+		Takes the site ID.
+		"""
+		self.log.debug("called with gauge %s.", site_id)
+		nwis_url = 'https://waterservices.usgs.gov/nwis/iv/?period=P1D&format=json&sites=' + site_id
+		return self.query_nwis(nwis_url)
 
-				self.log.debug('type:%s  Name:%s  Value:%s  Prev:%s at %s' % (type_num, name,  value, prev_val, time))
 
-				self.gauges[siteCode]['reading'][type_num] = {'name':name, 'description':desc, 'time':time, 'value':value, 'prevVal':prev_val}
-			except:
-				self.log.debug('Exception processing %s', str(item))
-
-	def query_by_gauge(self, gauge):
+	def query_by_site_id_list(self, site_id_list):
 		"""
 		Fetches the json gauge and parses part of it.
-		Takes the gauge number.
+		Takes a list of site numbers.
 		"""
-		self.log.debug("called with gauge %s.", gauge)
-		nwis_url = 'http://waterservices.usgs.gov/nwis/iv/?period=P1D&format=json&sites=' + gauge
-		self.query_nwis(nwis_url)
-		return self.gauges
-
-	def query_by_gauges(self, gaugeList):
-		"""
-		Fetches the json gauge and parses part of it.
-		Takes the gauge number.
-		"""
-		if len(gaugeList) > 0:
-			gauge = ','.join(gaugeList)
-			self.log.debug("called with gauge %s.", gauge)
-			nwis_url = 'http://waterservices.usgs.gov/nwis/iv/?period=P1D&format=json&sites=' + gauge
-			self.query_nwis(nwis_url)
-		return self.gauges
+		if len(site_id_list) > 0:
+			sites = ','.join(site_id_list)
+			self.log.debug("called with gauge %s.", sites)
+			nwis_url = 'https://waterservices.usgs.gov/nwis/iv/?period=P1D&format=json&sites=' + sites
+			
+		return self.query_nwis(nwis_url)
 
 	def query_by_bbox(self, west, south, east, north):
 		"""
-		Fetches the json gauge and parses part of it.
-		Takes the gauge number.
+		Fetches the json site and parses part of it.
+		Takes the geobox co-ordinates.
 		"""
-		nwis_url = 'http://waterservices.usgs.gov/nwis/iv/?period=P1D&format=json&bBox=%f,%f,%f,%f' % (west, south, east, north)
-		self.query_nwis(nwis_url)
-		return self.gauges
+		nwis_url = 'https://waterservices.usgs.gov/nwis/iv/?period=P1D&format=json&bBox=%f,%f,%f,%f' % (west, south, east, north)
+		return self.query_nwis(nwis_url)
+
 
 	def query_by_radius(self, lat, lon, distance, kilometers=False):
 		"""
-		Fetches the json gauge and parses part of it.
-		Takes the gauge number.
+		Fetches the json site and parses part of it.
+		Takes the radius.
 		"""
 		(west, south, east, north) = get_bounding_box(lat, lon, distance, kilometers)
 		nwis_url = 'http://waterservices.usgs.gov/nwis/iv/?period=P1D&format=json&bBox=%f,%f,%f,%f' % (west, south, east, north)
-		self.query_nwis(nwis_url)
-		return self.gauges
-
-	def site_data_str(self, site):
-		""" print the USGS Site Data"""
-		out = ''
-		keys = site['reading'].keys()
-
-		if '00065' in keys:
-			out +=  '%s : %s located at latitude %f longitude %f\n' % (site['siteCode'], site['site_name'], site['lat'], site['lon'])
-			ft      = float(site['reading']['00065']['value'])
-			ft_prev = float(site['reading']['00065']['prevVal'])
-			out += 'Currently at %s feet ' % site['reading']['00065']['value']
-			if ft > ft_prev:
-				out += 'Rising   '
-			elif ft < ft_prev:
-				out += 'Failling '
-			else:
-				out += 'Holding  '
-		if '00010' in keys:
-			out += 'Temp (centegrade) %f ' % float(site['reading']['00010']['value'])
-		if '00060' in keys:
-			out += '(%s CFS) ' % site['reading']['00060']['value']
-		return out
-
-
+		return self.query_nwis(nwis_url)
 		
 
 if __name__ == '__main__':
@@ -201,30 +238,30 @@ if __name__ == '__main__':
 	logging.basicConfig(format='%(asctime)s - %(name)s - %(funcName)s - %(message)s', level=logging.INFO)
 	log.debug('About to instantiate Rivergauge')
 
-	rg  = Rivergauge()
+	rg  = NWIS()
 
 	print('\n\n=============================================\n')
 	print('              Gauges within 30 Miles')
-	gauges = rg.query_by_radius(38.96, -77.45, 15)
-	for site in gauges.keys():
-		print(rg.site_data_str(gauges[site]) + '\n')
+	sites = rg.query_by_radius(38.96, -77.45, 15)
+	for site_id in sites.keys():
+		print(str(sites[site_id]))
 
 	print('\n\n=============================================\n')
 	print('              Gauges in Bounded Box')
-	gauges = rg.query_by_bbox(-78.0,38.0,-77.5,39.3)
-	for site in gauges.keys():
-		print(rg.site_data_str(gauges[site]) + '\n')
+	sites = rg.query_by_bbox(-78.0,38.0,-77.5,39.3)
+	for site_id in sites.keys():
+		print(str(sites[site_id]))
 
 	print('\n\n=============================================\n')
-	print('              Multiple Gauges')
-	gauges = rg.query_by_gauges(['01646500','01643700'])
-	for site in gauges.keys():
-		print(rg.site_data_str(gauges[site]) + '\n')
+	print('              Multiple Sites')
+	sites = rg.query_by_site_id_list(['01646500','01643700'])
+	for site_id in sites.keys():
+		print(str(sites[site_id]))
+
 
 	print('\n\n=============================================\n')
-	print('              Single Gauge')
-	gauges = rg.query_by_gauge('01646500')
-	for site in gauges.keys():
-		print(rg.site_data_str(gauges[site]) + '\n')
+	print('              Single Site')
+	sites = rg.query_by_site_id('01646500')
+	for site_id in sites.keys():
+		print(str(sites[site_id]))
 	
-# http://waterservices.usgs.gov/nwis/iv/?period=P7D&bBox=-78,38,-77,39&format=waterml
